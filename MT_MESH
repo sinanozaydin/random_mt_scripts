@@ -44,7 +44,7 @@ class MT_MESH_3D(object):
 	def __init__(self, edi_path = None, **kwargs):
 
 		self.edi_path = edi_path
-		self.project_name = kwargs.pop('project_name','Cent_pont_0')
+		self.project_name = kwargs.pop('project_name','Default_Name')
 
 		self.x_len = kwargs.pop('x_len',3.5)
 		self.y_len = kwargs.pop('y_len',3.5)
@@ -96,26 +96,31 @@ class MT_MESH_3D(object):
 
 		if self.init_model_type == 'homog':
 
-			self.initial_resistivity = kwargs.pop('initial_resistivity', '4.60517E+00')
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '100.0')
+			self.initial_resistivity = '%.5E' % np.log(self.initial_resistivity)
 
 		elif self.init_model_type == 'random':
 
-			self.initial_resistivity = kwargs.pop('initial_resistivity', '4.60517E+00')
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '4.60517E+00')
 
 		elif self.init_model_type == 'mean':
 
-			self.initial_resistivity = kwargs.pop('initial_resistivity', '4.60517E+00')
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '4.60517E+00')
 
 		elif self.init_model_type == 'ssq':
 
-			self.initial_resistivity = kwargs.pop('initial_resistivity', '4.60517E+00')
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '4.60517E+00')
 			print 'What is the filename for the ssq model ?'
 			self.ssq_file_path = raw_input()
 			self.ssq_file_path = os.getcwd() + '/' + self.ssq_file_path
 
 		elif self.init_model_type == 'parent':
 
-			self.initial_resistivity = kwargs.pop('initial_resistivity', '4.60517E+00')
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '4.60517E+00')
+
+		elif self.init_model_type == 'median_model':
+
+			self.initial_resistivity = kwargs.pop('initial_res_homog', '4.60517E+00')
 
 		self.topog_answer = kwargs.pop('topog_answer', 'n')
 		self.sea_answer = kwargs.pop('sea_answer', 'n')
@@ -126,12 +131,29 @@ class MT_MESH_3D(object):
 		self.fi_layer_t = kwargs.pop('fi_layer_t', 0.1)
 		self.fi_layer_num = kwargs.pop('fi_layer_num', 0)
 
-		self.transition_zone_add = kwargs.pop('trans_layer','n')
-
 		#Some EM constants
 
 		self.mu = 4.0 * np.pi * 10**(-7)  #CGS
 		self.sfac = np.sqrt((4.0*np.pi*(10**(-7))*2.0*np.pi)/5.0) #Scaling Factor
+
+	def read_csv(self,filename,delim):
+
+		#Simple function for reading csv files and give out filtered output for given delimiter (delim)
+
+		file_obj = open(filename,'rt') #Creating file object
+		file_csv = csv.reader(file_obj,delimiter = delim) #Reading the file object with csv module, delimiter assigned to ','
+		data = [] #Creating empty array to append data
+
+		#Appending data from csb object
+		for row in file_csv:
+			data.append(row)
+
+		#Filtering data for None elements read.
+		for j in range(0,len(data)):
+			data[j] = list(filter(None,data[j]))
+		data = list(filter(None,data))
+
+		return data
 
 
 	def read_edi(self):
@@ -1139,9 +1161,6 @@ class MT_MESH_3D(object):
 
 			self.new_periods_write = self.approx_array
 
-		print 'Enter the resistivity value of the initial model space.'
-		self.initial_resistivity = '%.5E' % np.log(float(raw_input()))
-
 		if self.data_selection == 'resphase':
 			aaa.convert_appres()
 		elif self.data_selection == 'phase':
@@ -1149,11 +1168,66 @@ class MT_MESH_3D(object):
 		else:
 			pass
 
+	def read_median_data(self):
+
+		print('Enter the median data path...')
+		data_median_path = raw_input()
+		self.lat_interp = []
+		self.lon_interp = []
+		self.val_interp = []
+		for i in range(1,len(data_median)):
+			self.lon_interp.append(float(data_median[i][0]))
+			self.lat_interp.append(float(data_median[i][1]))
+			self.val_interp.append(float(data_median[i][2]))
+
+		self.lon_interp = np.array(self.lon_interp)
+		self.lat_interp = np.array(self.lat_interp)
+		self.val_interp = np.array(self.val_interp)
+
+		self.y_median = []
+		self.x_median = []
+
+		for i in range(0,len(self.lat_interp)):
+			self.y_median.append(((self.lat_interp[i] - self.mc_lat) * 110.54))
+			self.x_median.append((self.lon_interp[i] - self.mc_lon) * 111.320 * np.cos(np.deg2rad((self.lat_interp[i] + self.mc_lat) / 2.0)))
+
+		self.y_median = np.array(self.y_median)
+		self.x_median = np.array(self.x_median)
+
+		#print self.y_median
+		if self.mesh_rotation == 'y':
+
+			median_coords = np.asarray([self.x_median, self.y_median])
+
+			self.median_coords_rotated = np.array(np.dot(self.rotation_matrix, median_coords))
+
+			self.x_median = self.median_coords_rotated[0]
+			self.y_median = self.median_coords_rotated[1]
+
+		print 'Read the median data succesfully.'
+
+	def process_median_data(self):
+
+		def smallest_distance(x,y,x_list,y_list):
+
+			a = np.sqrt((x-x_list)**2.0 + (y-y_list)**2.0)
+
+			return np.where(a == np.amin(a))
+
+		self.rho_median_model = np.zeros(len(self.mesh_centers_x_array))
+
+		for i in range(0,len(self.mesh_centers_x_array)):
+			idx_sm, = smallest_distance(self.mesh_centers_x_array[i],self.mesh_centers_y_array[i],self.x_median,self.y_median)
+			idx_sm = int(idx_sm)
+			self.rho_median_model[i] = self.val_interp[idx_sm]
+
+		cansu = 1
+
 	def read_topog_data(self):
 
 		print 'What is the full filepath to the .xyz file?'
 		self.topog_file_path = raw_input()
-		
+
 		print 'Reading the topography data.'
 
 		self.topo_file_obj = open(self.topo_file_path, 'rb')
@@ -1859,41 +1933,20 @@ class MT_MESH_3D(object):
 		resistivity_air = '%.5E' % np.log(float(1.3e16))
 		resistivity_sea = '%.5E' % np.log(float(0.3))
 
-		if self.transition_zone_add == 'y':
-
-			def find_nearest_2(array,value):
-				idx = (np.abs(array-value)).argmin()
-				return idx
-
-			#Making the 410 and 660 km resistivities
-			resistivity_410 = '%.5E' % np.log(float(10.0))
-			resistivity_660 = '%.5E' % np.log(float(1.0))
-
-			z_410_idx = find_nearest_2(np.asarray(self.z_mesh)*1000.0,410000.0)
-			z_660_idx = find_nearest_2(np.asarray(self.z_mesh)*1000.0,660000.0)
-			#if (i >= z_410_idx) and (i<z_660_idx):
-			#elif (i>=z_660_idx):
-
-			print(z_410_idx,'AAAAAAAAAAAAAAAAa')
-			print(z_660_idx,'BBBBBBBBBBBBBBBBB')
-
 		self.lenres = self.x_num * self.y_num * self.z_num
 
 		if self.init_model_type == 'ssq':
 			aaa.read_ssq()
+		elif self.init_model_type == 'median_model':
+			aaa.read_median_data()
+			aaa.process_median_data()
 
 		self.ws_write = []
 		for i in range(0,self.z_num):
 			for j in range(0,self.x_num*self.y_num):
 				if self.cov_array[i][j] == 1.0:
 					if self.init_model_type == 'homog':
-						if self.transition_zone_add == 'y':
-							if (self.z_mesh[i] >= 410.0) and (self.z_mesh[i] < 660.0):
-								self.ws_write.append(resistivity_410)
-							elif (self.z_mesh[i] >= 660.0):
-								self.ws_write.append(resistivity_660)
-							else:
-								self.ws_write.append(resistivity)
+						self.ws_write.append(resistivity)
 					elif self.init_model_type == 'random':
 						self.ws_write.append('%.5E' % np.log(float(random.randrange(1,1000))))
 					elif self.init_model_type == 'ssq':
@@ -1904,6 +1957,8 @@ class MT_MESH_3D(object):
 							self.ws_write.append('%.5E' % np.log(float(self.rho_ssq[idx_smallest_ssq])))
 					elif self.init_model_type == 'parent':
 						self.ws_write.append('%.5E' % self.rho_list_sub[i][j])
+					elif self.init_model_type == 'median_model':
+						self.ws_write.append('%.5E' % np.log(self.rho_median_model[j]))
 
 				elif self.cov_array[i][j] == 9.0:
 					self.ws_write.append(resistivity_sea)
@@ -2222,24 +2277,22 @@ if parent_answer == 'y':
 	print 'Do you want to create a prior model output? y/n'
 	prior_answer = raw_input()
 else:
-	print 'Is the initial model resistivity distr. will be made up of an homogeneous (1), random (2), mean (3), interpolated data (4), ssq average (5) values?'
+	print 'Is the initial model resistivity distr. will be made up of an homogeneous (1), random (2), mean (3), interpolated data (4), ssq average (5), median model (6) values?'
 	parent_answer_2_inp = raw_input()
 	if parent_answer_2_inp == '1':
 		parent_answer_2 = 'homog'
-		print('Do you want to enter the transition zone resistivities in the initial model? y/n')
-		trans_layer_inp = raw_input()
+		print('Enter the resistivity value of the initial model space.')
+		initial_res = input()
 	elif parent_answer_2_inp == '2':
 		parent_answer_2 = 'random'
-		trans_layer_inp = None
 	elif parent_answer_2_inp == '3':
 		parent_answer_2 = 'mean'
-		trans_layer_inp = None
 	elif parent_answer_2_inp == '4':
 		parent_answer_2 = 'interp'
-		trans_layer_inp = None
 	elif parent_answer_2_inp == '5':
 		parent_answer_2 = 'ssq'
-		trans_layer_inp = None
+	elif parent_answer_2_inp == '6':
+		parent_answer_2 = 'median_model'
 
 	prior_answer = 'n'
 aaa = MT_MESH_3D(edi_path = os.getcwd(),project_name = p_name_input,y_len = northing_input,x_len = easting_input,
@@ -2249,7 +2302,7 @@ aaa = MT_MESH_3D(edi_path = os.getcwd(),project_name = p_name_input,y_len = nort
 	err_phsxy = einp_phsxy, err_phsyx = einp_phsyx, error_type = error_type_input,
 	tipper_include = inc_tip, mesh_rotation = rtm, mesh_angle = mran, topog_answer = topo_question,
 	sea_answer = sea_question, cov_question = cov_answer, init_model_type = parent_answer_2, prior_model_output = prior_answer, fi_layer = fi_layer_inp,
-	fi_layer_t = fi_layer_t_inp, fi_layer_num = fi_layer_num_inp,trans_layer = trans_layer_inp)
+	fi_layer_t = fi_layer_t_inp, fi_layer_num = fi_layer_num_inp, initial_res_homog = initial_res)
 aaa.read_edi()
 if topo_question == 'y':
 	aaa.read_topog_data()
